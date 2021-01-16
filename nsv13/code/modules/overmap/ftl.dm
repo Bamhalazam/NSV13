@@ -116,10 +116,9 @@
 			SL.set_parallax("transit", EAST)
 		else
 			SL.set_parallax(current_system.parallax_property, null)
-	if(!ftl_start)
-		for(var/mob/M in mobs_in_ship)
-			if(M && M.client && M.hud_used && length(M.client.parallax_layers))
-				M.hud_used.update_parallax(force=TRUE)
+	for(var/mob/M in mobs_in_ship)
+		if(M && M.client && M.hud_used && length(M.client.parallax_layers))
+			M.hud_used.update_parallax(force=TRUE)
 
 
 /obj/structure/overmap/proc/jump(datum/star_system/target_system, ftl_start) //FTL start IE, are we beginning a jump? Or ending one?
@@ -140,22 +139,25 @@
 	if(ftl_start)
 		relay(ftl_drive.ftl_loop, "<span class='warning'>You feel the ship lurch forward</span>", loop=TRUE, channel = CHANNEL_SHIP_ALERT)
 		var/datum/star_system/curr = SSstar_system.ships[src]["current_system"]
+		SEND_SIGNAL(src, COMSIG_SHIP_DEPARTED) // Let missions know we have left the system
 		curr.remove_ship(src)
 		var/speed = (curr.dist(target_system) / (ftl_drive.jump_speed_factor*10)) //TODO: FTL drive speed upgrades.
 		SSstar_system.ships[src]["to_time"] = world.time + speed MINUTES
 		SEND_SIGNAL(src, COMSIG_FTL_STATE_CHANGE)
 		if(role == MAIN_OVERMAP) //Scuffed please fix
 			priority_announce("Attention: All hands brace for FTL translation. Destination: [target_system]. Projected arrival time: [station_time_timestamp("hh:mm", world.time + speed MINUTES)] (Local time)","Automated announcement") //TEMP! Remove this shit when we move ruin spawns off-z
+			if(structure_crit) //Tear the ship apart if theyre trying to limp away.
+				for(var/i = 0, i < rand(4,8), i++)
+					var/name = pick(GLOB.teleportlocs)
+					var/area/target = GLOB.teleportlocs[name]
+					var/turf/T = pick(get_area_turfs(target))
+					new /obj/effect/temp_visual/explosion_telegraph(T)
 		SSstar_system.ships[src]["target_system"] = target_system
 		SSstar_system.ships[src]["from_time"] = world.time
 		SSstar_system.ships[src]["current_system"] = null
 		addtimer(CALLBACK(src, .proc/jump, target_system, FALSE), speed MINUTES)
-		if(structure_crit) //Tear the ship apart if theyre trying to limp away.
-			for(var/i = 0, i < rand(4,8), i++)
-				var/name = pick(GLOB.teleportlocs)
-				var/area/target = GLOB.teleportlocs[name]
-				var/turf/T = pick(get_area_turfs(target))
-				new /obj/effect/temp_visual/explosion_telegraph(T)
+		
+
 	else
 		SSstar_system.ships[src]["target_system"] = null
 		SSstar_system.ships[src]["current_system"] = target_system
@@ -165,6 +167,7 @@
 		SEND_SIGNAL(src, COMSIG_FTL_STATE_CHANGE)
 		relay(ftl_drive.ftl_exit, "<span class='warning'>You feel the ship lurch to a halt</span>", loop=FALSE, channel = CHANNEL_SHIP_ALERT)
 		target_system.add_ship(src) //Get the system to transfer us to its location.
+		SEND_SIGNAL(src, COMSIG_SHIP_ARRIVED) // Let missions know we have arrived in the system
 	for(var/mob/M in mobs_in_ship)
 		if(iscarbon(M))
 			var/mob/living/carbon/L = M
@@ -221,7 +224,7 @@
 	req_access = list(ACCESS_ENGINE_EQUIP)
 	var/tier = 1
 	var/faction = "nanotrasen" //For ship tracking. The tracking feature of the FTL compy is entirely so that antagonists can hunt the NT ships down
-	var/jump_speed_factor = 1 //How quickly do we jump? Larger is faster.
+	var/jump_speed_factor = 2 //How quickly do we jump? Larger is faster.
 	var/ftl_state = FTL_STATE_IDLE //Mr Gaeta, spool up the FTLs.
 	var/obj/item/radio/radio //For engineering alerts.
 	var/radio_key = /obj/item/encryptionkey/headset_eng
@@ -229,10 +232,10 @@
 	var/active = FALSE
 	var/progress = 0 SECONDS
 	var/progress_rate = 1 SECONDS
-	var/spoolup_time = 1 MINUTES //Make sure this is always longer than the ftl_startup_time, or you can seriously bug the ship out with cancel jump spam.
+	var/spoolup_time = 45 SECONDS //Make sure this is always longer than the ftl_startup_time, or you can seriously bug the ship out with cancel jump spam.
 	var/screen = 1
 	var/can_cancel_jump = TRUE //Defaults to true. TODO: Make emagging disable this
-	var/max_range = 100 //max jump range. This is _very_ long distance
+	var/max_range = 30000 //max jump range. This is _very_ long distance
 	var/list/tracking = list() //What ships are we tracking, if any? Used for antag FTLs so they can always find you.
 	var/ftl_loop = 'nsv13/sound/effects/ship/FTL_loop.ogg'
 	var/ftl_start = 'nsv13/sound/effects/ship/FTL_long.ogg'
@@ -264,8 +267,8 @@
 			ftl_start = 'nsv13/sound/effects/ship/slipstream_start.ogg'
 			ftl_startup_time = 6 SECONDS
 			spoolup_time = 30 SECONDS
-			jump_speed_factor = 2
-			max_range = 150
+			jump_speed_factor = 3
+
 		if(3) //Admin only so I can test things more easily, or maybe dropped from an EXTREMELY RARE, copyright free ruin.
 			name = "Warp drive computer"
 			desc = "A computer that is impossibly advanced for this time period. It uses unknown technology harvested by unknown means to accelerate a starship to unheard of speeds. Ardata operatives have as yet been unable to ascertain how it functions, but field testing shows that this eliminates the need for spooling entirely in favour of distorting space."
@@ -276,8 +279,8 @@
 			spoolup_time = 10 SECONDS
 			auto_spool = TRUE
 			jump_speed_factor = 5
-			max_range = 300
 
+	max_range = initial(max_range) * 2
 /*
 Preset classes of FTL drive with pre-programmed behaviours
 */
@@ -294,11 +297,18 @@ Preset classes of FTL drive with pre-programmed behaviours
 
 /obj/machinery/computer/ship/ftl_computer/syndicate
 	name = "Syndicate FTL computer"
-	jump_speed_factor = 2 //Twice as fast as NT's shit so they can hunt the ship down or get ahead of them to set up an ambush of raptors
+//	jump_speed_factor = 2 //Twice as fast as NT's shit so they can hunt the ship down or get ahead of them to set up an ambush of raptors
 	radio_key = /obj/item/encryptionkey/syndicate
 	engineering_channel = "Syndicate"
 	faction = "syndicate"
 	req_access = list(ACCESS_SYNDICATE)
+
+/obj/machinery/computer/ship/ftl_computer/mining
+	name = "Mining FTL computer"
+	radio_key = /obj/item/encryptionkey/headset_mining
+	engineering_channel = "Supply"
+	req_access = null
+	req_one_access_txt = "31;48"
 
 /obj/machinery/computer/ship/ftl_computer/Initialize()
 	. = ..()
@@ -373,7 +383,8 @@ A way for syndies to track where the player ship is going in advance, so they ca
 		ui.open()
 
 /obj/machinery/computer/ship/ftl_computer/ui_act(action, params, datum/tgui/ui)
-	if(..())
+	. = ..()
+	if(.)
 		return
 	if(!has_overmap())
 		return
